@@ -5,9 +5,6 @@ export interface GenParams {
   /** Blocks of each type on the wall (same number for every type). */
   layersPerType: number;
   columnCount: number;
-  deckSlots: number;
-  /** Initial ball supply size. */
-  ballCount: number;
   /** Bounds on the size of each same-color adjacency group. */
   minGroup: number;
   maxGroup: number;
@@ -242,13 +239,48 @@ function generateWallOnce(p: GenParams, rand: () => number): LayerType[][] {
 }
 
 /**
- * A ball supply of `ballCount` balls: at least one per type present, the rest
- * uniform random over the level's types, shuffled.
+ * A ball supply of `count` balls whose color ratio mirrors the wall's actual
+ * block counts (largest-remainder rounding), shuffled. Every color present on
+ * the wall gets at least one ball when the count allows it.
  */
-export function generateBalls(p: GenParams, rand: () => number): LayerType[] {
+export function generateBalls(
+  count: number,
+  columns: LayerType[][],
+  rand: () => number
+): LayerType[] {
+  const blockCounts = new Map<LayerType, number>();
+  let total = 0;
+  for (const c of columns) {
+    for (const t of c) {
+      blockCounts.set(t, (blockCounts.get(t) ?? 0) + 1);
+      total++;
+    }
+  }
+  if (total === 0) return [];
+
+  const types = [...blockCounts.keys()];
+  const alloc = types.map((t) => {
+    const quota = (count * blockCounts.get(t)!) / total;
+    return { t, n: Math.floor(quota), frac: quota - Math.floor(quota), rnd: rand() };
+  });
+  let left = count - alloc.reduce((n, a) => n + a.n, 0);
+  alloc.sort((a, b) => b.frac - a.frac || a.rnd - b.rnd);
+  for (let i = 0; left > 0; i = (i + 1) % alloc.length) {
+    alloc[i].n++;
+    left--;
+  }
+  // No color present on the wall should end up unclearable if we can help it.
+  if (count >= types.length) {
+    for (const zero of alloc.filter((a) => a.n === 0)) {
+      const donor = alloc.reduce((m, a) => (a.n > m.n ? a : m), alloc[0]);
+      if (donor.n <= 1) break;
+      donor.n--;
+      zero.n++;
+    }
+  }
+
   const balls: LayerType[] = [];
-  for (let t = 0; t < p.typeCount && balls.length < p.ballCount; t++) balls.push(t);
-  while (balls.length < p.ballCount) balls.push(Math.floor(rand() * p.typeCount));
+  for (const a of alloc) for (let i = 0; i < a.n; i++) balls.push(a.t);
   for (let i = balls.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
     [balls[i], balls[j]] = [balls[j], balls[i]];

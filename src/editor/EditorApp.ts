@@ -232,7 +232,10 @@ export class EditorApp {
       .addEventListener('click', () => this.opts.onExit());
     this.setupPanel.querySelector('[data-act="continue"]')!.addEventListener('click', () => {
       readBack();
-      if (this.sigWall() !== this.wallSig) this.columns = null;
+      if (this.sigWall() !== this.wallSig) {
+        this.columns = null;
+        this.balls = null; // ball ratios derive from the wall
+      }
       if (this.sigBalls() !== this.ballsSig) this.balls = null;
       this.wallSig = this.sigWall();
       this.ballsSig = this.sigBalls();
@@ -356,8 +359,8 @@ export class EditorApp {
   }
 
   private enterWall(): void {
-    if (!this.balls) this.balls = generateBalls(this.genParams(), this.nextRand());
     if (!this.columns) this.columns = generateWall(this.genParams(), this.nextRand());
+    if (!this.balls) this.balls = generateBalls(this.ballCount, this.columns, this.nextRand());
     this.selectedBall = null;
     this.setupPanel.style.display = 'none';
     this.toolbarEl.style.display = 'flex';
@@ -442,7 +445,7 @@ export class EditorApp {
     });
     this.ballsBarEl.querySelector('[data-act="rand-balls"]')!.addEventListener('click', () => {
       this.ballCount = this.balls!.length || this.ballCount;
-      this.balls = generateBalls(this.genParams(), this.nextRand());
+      this.balls = generateBalls(this.ballCount, this.columns ?? [], this.nextRand());
       this.selectedBall = null;
       this.renderBallsBar();
     });
