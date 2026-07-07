@@ -10,6 +10,12 @@ export const COL_PITCH = 1.0;
 /** World y of the wall's top edge — columns hang downward from here. */
 export const WALL_TOP = 0;
 
+/**
+ * Rows shown above the floor in the game. Taller columns continue below the
+ * floor, hidden, and rise into view as the pistons push them up.
+ */
+export const VISIBLE_ROWS = 12;
+
 export const BALL_R = 0.32;
 export const DECK_PITCH = 0.9;
 export const QUEUE_PITCH = 0.52;

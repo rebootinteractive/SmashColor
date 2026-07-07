@@ -66,9 +66,12 @@ function shuffle<T>(arr: T[], rand: () => number): T[] {
  * the same color that touch merge into one adjacency group).
  */
 export function generateWall(p: GenParams, rand: () => number): LayerType[][] {
+  // Bigger walls get fewer candidate runs so generation stays instant.
+  const total = p.typeCount * p.layersPerType;
+  const candidates = total <= 300 ? 8 : total <= 900 ? 3 : 2;
   let best: LayerType[][] | null = null;
   let bestScore = Infinity;
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < candidates; i++) {
     const wall = generateWallOnce(p, rand);
     const score = violationScore(wall, p);
     if (score < bestScore) {
@@ -111,6 +114,8 @@ function generateWallOnce(p: GenParams, rand: () => number): LayerType[][] {
   const total = p.typeCount * p.layersPerType;
   const lo = Math.max(1, Math.min(p.minGroup, p.maxGroup));
   const hi = Math.max(lo, p.maxGroup);
+  const triesHard = total <= 300 ? 14 : 8;
+  const triesSoft = total <= 300 ? 10 : 6;
 
   // Column heights: as balanced as possible, extras on random columns.
   const base = Math.floor(total / p.columnCount);
@@ -118,23 +123,29 @@ function generateWallOnce(p: GenParams, rand: () => number): LayerType[][] {
   const extraCols = shuffle(Array.from({ length: p.columnCount }, (_, i) => i), rand);
   for (let i = 0; i < total % p.columnCount; i++) heights[extraCols[i]]++;
 
-  // -1 = unassigned. grid[col][row], row 0 = top.
+  // -1 = unassigned. grid[col][row], row 0 = top. Cells encoded col*K+row for
+  // cheap set membership.
+  const K = 4096;
   const grid: number[][] = heights.map((h) => new Array<number>(h).fill(-1));
+  const open = new Set<number>();
+  for (let c = 0; c < p.columnCount; c++) for (let r = 0; r < heights[c]; r++) open.add(c * K + r);
+
   const inBounds = (c: number, r: number) =>
     c >= 0 && c < p.columnCount && r >= 0 && r < heights[c];
-  const neighbors = (c: number, r: number): [number, number][] => {
-    const out: [number, number][] = [];
-    for (const [nc, nr] of [[c - 1, r], [c + 1, r], [c, r - 1], [c, r + 1]] as [number, number][]) {
-      if (inBounds(nc, nr)) out.push([nc, nr]);
-    }
+  const neighborKeys = (key: number): number[] => {
+    const c = Math.floor(key / K);
+    const r = key % K;
+    const out: number[] = [];
+    if (inBounds(c - 1, r)) out.push(key - K);
+    if (inBounds(c + 1, r)) out.push(key + K);
+    if (inBounds(c, r - 1)) out.push(key - 1);
+    if (inBounds(c, r + 1)) out.push(key + 1);
     return out;
   };
-  const unassignedCells = (): [number, number][] => {
-    const out: [number, number][] = [];
-    for (let c = 0; c < p.columnCount; c++)
-      for (let r = 0; r < heights[c]; r++) if (grid[c][r] === -1) out.push([c, r]);
-    return out;
-  };
+  const typeAt = (key: number) => grid[Math.floor(key / K)][key % K];
+  const touchesType = (key: number, type: LayerType) =>
+    neighborKeys(key).some((k) => typeAt(k) === type);
+  const freeNeighbors = (key: number) => neighborKeys(key).filter((k) => open.has(k)).length;
 
   // The pool as shuffled groups.
   const groups: { type: LayerType; size: number }[] = [];
@@ -143,67 +154,73 @@ function generateWallOnce(p: GenParams, rand: () => number): LayerType[][] {
   }
   shuffle(groups, rand);
 
-  const touchesType = (c: number, r: number, type: LayerType) =>
-    neighbors(c, r).some(([nc, nr]) => grid[nc][nr] === type);
-
   /**
    * Grow one connected blob of `size` on unassigned cells. With hardAvoid the
    * blob refuses to touch existing same-color cells (no merging past
-   * maxGroup) and fails instead — the caller retries or relaxes.
+   * maxGroup) and fails instead — the caller retries or relaxes. The frontier
+   * is maintained incrementally (the grid is static during one growth).
    */
   const growBlob = (
+    openArr: number[],
     type: LayerType,
     size: number,
     attempt: number,
     hardAvoid: boolean
-  ): [number, number][] | null => {
-    let open = unassignedCells();
-    if (open.length < size) return null;
-    if (hardAvoid) {
-      const clean = open.filter(([c, r]) => !touchesType(c, r, type));
-      if (clean.length === 0) return null;
-      open = clean;
-    }
-    // Seed in tight pockets first (fewest unassigned neighbors) so no orphan
-    // holes are left behind; later attempts seed more randomly.
-    const scored = open
-      .map(([c, r]) => ({
-        c,
-        r,
-        free: neighbors(c, r).filter(([nc, nr]) => grid[nc][nr] === -1).length,
-        rnd: rand(),
-      }))
-      .sort((a, b) => a.free - b.free || a.rnd - b.rnd);
-    const pick = attempt === 0 ? 0 : Math.floor(rand() * Math.min(scored.length, 6));
-    const seed: [number, number] = [scored[pick].c, scored[pick].r];
-
-    const blob: [number, number][] = [seed];
-    const inBlob = new Set<string>([`${seed[0]},${seed[1]}`]);
-    while (blob.length < size) {
-      const frontier: [number, number][] = [];
-      const seen = new Set<string>();
-      for (const [c, r] of blob) {
-        for (const [nc, nr] of neighbors(c, r)) {
-          const key = `${nc},${nr}`;
-          if (grid[nc][nr] !== -1 || inBlob.has(key) || seen.has(key)) continue;
-          if (hardAvoid && touchesType(nc, nr, type)) continue;
-          seen.add(key);
-          frontier.push([nc, nr]);
-        }
+  ): number[] | null => {
+    if (openArr.length < size) return null;
+    // Seed from a small random sample, preferring tight pockets (fewest
+    // unassigned neighbors) so no orphan holes are left behind.
+    let seed = -1;
+    let seedScore = Infinity;
+    const sample = Math.min(openArr.length, attempt === 0 ? 24 : 10);
+    for (let i = 0; i < sample; i++) {
+      const key = openArr[Math.floor(rand() * openArr.length)];
+      if (hardAvoid && touchesType(key, type)) continue;
+      const score = freeNeighbors(key) + rand() * 0.5;
+      if (score < seedScore) {
+        seedScore = score;
+        seed = key;
       }
+    }
+    if (seed < 0) return null;
+
+    const blob: number[] = [seed];
+    const inBlob = new Set<number>([seed]);
+    const frontier: number[] = [];
+    const inFrontier = new Set<number>();
+    const pushNeighbors = (key: number) => {
+      for (const nk of neighborKeys(key)) {
+        if (!open.has(nk) || inBlob.has(nk) || inFrontier.has(nk)) continue;
+        if (hardAvoid && touchesType(nk, type)) continue;
+        inFrontier.add(nk);
+        frontier.push(nk);
+      }
+    };
+    pushNeighbors(seed);
+    while (blob.length < size) {
       if (frontier.length === 0) return null;
-      const next = frontier[Math.floor(rand() * frontier.length)];
+      const i = Math.floor(rand() * frontier.length);
+      const next = frontier[i];
+      frontier[i] = frontier[frontier.length - 1];
+      frontier.pop();
+      inFrontier.delete(next);
       blob.push(next);
-      inBlob.add(`${next[0]},${next[1]}`);
+      inBlob.add(next);
+      pushNeighbors(next);
     }
     return blob;
   };
 
   const tryPlace = (g: { type: LayerType; size: number }, hardAvoid: boolean, tries: number) => {
+    if (open.size < g.size) return false;
+    const openArr = [...open];
     for (let attempt = 0; attempt < tries; attempt++) {
-      const blob = growBlob(g.type, g.size, attempt, hardAvoid);
+      const blob = growBlob(openArr, g.type, g.size, attempt, hardAvoid);
       if (blob) {
-        for (const [c, r] of blob) grid[c][r] = g.type;
+        for (const key of blob) {
+          grid[Math.floor(key / K)][key % K] = g.type;
+          open.delete(key);
+        }
         return true;
       }
     }
@@ -217,7 +234,7 @@ function generateWallOnce(p: GenParams, rand: () => number): LayerType[][] {
   let stall = 0;
   while (remaining.length > 0) {
     const g = remaining.shift()!;
-    if (tryPlace(g, true, 14) || (stall > remaining.length && tryPlace(g, false, 10))) {
+    if (tryPlace(g, true, triesHard) || (stall > remaining.length && tryPlace(g, false, triesSoft))) {
       stall = 0;
       continue;
     }
@@ -227,9 +244,10 @@ function generateWallOnce(p: GenParams, rand: () => number): LayerType[][] {
       continue;
     }
     let left = g.size;
-    for (const [c, r] of shuffle(unassignedCells(), rand)) {
+    for (const key of shuffle([...open], rand)) {
       if (left === 0) break;
-      grid[c][r] = g.type;
+      grid[Math.floor(key / K)][key % K] = g.type;
+      open.delete(key);
       left--;
     }
     stall = 0;

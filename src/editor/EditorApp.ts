@@ -182,17 +182,17 @@ export class EditorApp {
         <div class="ed-row"><span class="ed-label">Colors</span>
           <input class="mini-num" data-f="types" type="number" min="2" max="${MAX_TYPES}" /></div>
         <div class="ed-row"><span class="ed-label">Layers / color</span>
-          <input class="mini-num" data-f="layers" type="number" min="1" max="40" /></div>
+          <input class="mini-num" data-f="layers" type="number" min="1" max="999" /></div>
         <div class="ed-row"><span class="ed-label">Columns</span>
           <input class="mini-num" data-f="columns" type="number" min="2" max="9" /></div>
         <div class="ed-row"><span class="ed-label">Deck slots</span>
           <input class="mini-num" data-f="deck" type="number" min="0" max="5" /></div>
         <div class="ed-row"><span class="ed-label">Balls</span>
-          <input class="mini-num" data-f="balls" type="number" min="1" max="60" /></div>
+          <input class="mini-num" data-f="balls" type="number" min="1" max="999" /></div>
         <div class="ed-row"><span class="ed-label">Min group</span>
-          <input class="mini-num" data-f="mingroup" type="number" min="1" max="40" /></div>
+          <input class="mini-num" data-f="mingroup" type="number" min="1" max="999" /></div>
         <div class="ed-row"><span class="ed-label">Max group</span>
-          <input class="mini-num" data-f="maxgroup" type="number" min="1" max="40" /></div>
+          <input class="mini-num" data-f="maxgroup" type="number" min="1" max="999" /></div>
       </div>
       <div class="setup-summary" data-el="summary"></div>
       <div class="setup-warn" data-el="warn"></div>
@@ -214,12 +214,12 @@ export class EditorApp {
     const readBack = () => {
       this.name = f('name').value || 'My Level';
       this.typeCount = clampInt(f('types').value, 2, MAX_TYPES, 4);
-      this.layersPerType = clampInt(f('layers').value, 1, 40, 12);
+      this.layersPerType = clampInt(f('layers').value, 1, 999, 12);
       this.columnCount = clampInt(f('columns').value, 2, 9, 6);
       this.deckSlots = clampInt(f('deck').value, 0, 5, 3);
-      this.ballCount = clampInt(f('balls').value, 1, 60, 12);
-      this.minGroup = clampInt(f('mingroup').value, 1, 40, 2);
-      this.maxGroup = clampInt(f('maxgroup').value, 1, 40, 6);
+      this.ballCount = clampInt(f('balls').value, 1, 999, 12);
+      this.minGroup = clampInt(f('mingroup').value, 1, 999, 2);
+      this.maxGroup = clampInt(f('maxgroup').value, 1, 999, 6);
       this.updateSetupSummary();
     };
     for (const k of ['name', 'types', 'layers', 'columns', 'deck', 'balls', 'mingroup', 'maxgroup']) {

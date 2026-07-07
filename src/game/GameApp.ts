@@ -7,12 +7,14 @@ import { WallView, PopBurst, makeBallMesh, makePadMesh, disposeMesh } from './Wa
 import { Tweens, easeInOutCubic, easeOutCubic } from './Tween';
 import { Hud } from './Hud';
 import {
+  BLOCK_D,
+  BLOCK_H,
   COL_PITCH,
   DECK_PITCH,
   QUEUE_PITCH,
   QUEUE_VISIBLE,
+  VISIBLE_ROWS,
   WALL_TOP,
-  BLOCK_H,
   colX,
   deckYFor,
   queueYFor,
@@ -56,9 +58,12 @@ export class GameApp {
   private camLook = new THREE.Vector3();
 
   private columnCount: number;
+  private visibleRows: number;
   private shootY: number;
   private deckY: number;
   private queueY: number;
+  private floor: { mesh: THREE.Mesh; geo: THREE.BufferGeometry; mat: THREE.Material } | null =
+    null;
 
   private onPointerDown = (e: PointerEvent) => this.handleTap(e);
 
@@ -66,7 +71,8 @@ export class GameApp {
     this.board = new Board(opts.level);
     this.columnCount = opts.level.columns.length;
     const maxRows = Math.max(1, ...opts.level.columns.map((c) => c.length));
-    this.shootY = shootYFor(maxRows);
+    this.visibleRows = Math.min(maxRows, VISIBLE_ROWS);
+    this.shootY = shootYFor(this.visibleRows);
     this.deckY = deckYFor(this.shootY);
     this.queueY = queueYFor(this.deckY);
 
@@ -81,7 +87,26 @@ export class GameApp {
     dir.position.set(2, 5, 7);
     this.scene.add(dir);
 
-    this.wall = new WallView(this.board.columns, this.columnCount);
+    // Tall walls continue below a floor; hidden rows rise into view as the
+    // pistons push columns up. A clipping plane makes them emerge smoothly.
+    let clipPlane: THREE.Plane | undefined;
+    if (maxRows > this.visibleRows) {
+      const floorY = WALL_TOP - this.visibleRows * BLOCK_H;
+      clipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -floorY);
+      this.renderer.localClippingEnabled = true;
+      const geo = new THREE.BoxGeometry(
+        this.columnCount * COL_PITCH + 0.8,
+        0.3,
+        BLOCK_D + 0.6
+      );
+      const mat = new THREE.MeshStandardMaterial({ color: 0xb3aede, roughness: 0.65 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(0, floorY - 0.15, 0);
+      this.scene.add(mesh);
+      this.floor = { mesh, geo, mat };
+    }
+
+    this.wall = new WallView(this.board.columns, this.columnCount, clipPlane);
     this.scene.add(this.wall.group);
 
     // Shooting point ring.
@@ -149,7 +174,12 @@ export class GameApp {
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
 
-    const wallHits = ray.intersectObjects(this.wall.allMeshes(), false);
+    // Only blocks above the floor are in play.
+    const targets: THREE.Mesh[] = [];
+    for (const col of this.wall.cols) {
+      for (let r = 0; r < Math.min(col.length, this.visibleRows); r++) targets.push(col[r]);
+    }
+    const wallHits = ray.intersectObjects(targets, false);
     if (wallHits.length > 0) {
       const cell = this.wall.cellOf(wallHits[0].object);
       if (cell) this.shoot(cell);
@@ -180,7 +210,7 @@ export class GameApp {
     if (!targetMesh) return;
     const target = targetMesh.position.clone();
     const match = this.board.blockAt(cell) === type;
-    const region = match ? this.board.region(cell) : [];
+    const region = match ? this.board.region(cell, this.visibleRows) : [];
 
     this.shooting = true;
     this.board.consumeActive();
@@ -461,6 +491,12 @@ export class GameApp {
     this.ringGeo.dispose();
     this.ringMat.dispose();
     this.scene.remove(this.ring);
+    if (this.floor) {
+      this.floor.geo.dispose();
+      this.floor.mat.dispose();
+      this.scene.remove(this.floor.mesh);
+      this.floor = null;
+    }
     for (const b of this.bursts) b.dispose();
     this.bursts = [];
     this.hud.dispose();

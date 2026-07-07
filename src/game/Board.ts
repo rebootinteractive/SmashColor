@@ -34,10 +34,14 @@ export class Board {
     return this.columns[cell.col]?.[cell.row];
   }
 
-  /** Connected same-type region containing `cell` (4-adjacency on the grid). */
-  region(cell: Cell): Cell[] {
+  /**
+   * Connected same-type region containing `cell` (4-adjacency on the grid).
+   * Rows at or beyond `maxRow` are out of play (hidden below the floor) — the
+   * blast neither destroys them nor spreads through them.
+   */
+  region(cell: Cell, maxRow = Number.POSITIVE_INFINITY): Cell[] {
     const type = this.blockAt(cell);
-    if (type === undefined) return [];
+    if (type === undefined || cell.row >= maxRow) return [];
     const seen = new Set<string>();
     const out: Cell[] = [];
     const stack: Cell[] = [cell];
@@ -45,6 +49,7 @@ export class Board {
       const c = stack.pop()!;
       const key = `${c.col},${c.row}`;
       if (seen.has(key)) continue;
+      if (c.row >= maxRow) continue;
       if (this.blockAt(c) !== type) continue;
       seen.add(key);
       out.push(c);

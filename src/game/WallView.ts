@@ -12,12 +12,13 @@ const padGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.08, 28);
 const railGeo = new THREE.CylinderGeometry(0.05, 0.05, 1, 10);
 
 /** Fresh material per block — blast/fade animations mutate materials, so no sharing. */
-export function makeBlockMesh(type: LayerType): THREE.Mesh {
+export function makeBlockMesh(type: LayerType, clipPlane?: THREE.Plane): THREE.Mesh {
   const mat = new THREE.MeshStandardMaterial({
     color: PALETTE[type % PALETTE.length],
     roughness: 0.42,
     metalness: 0.05,
   });
+  if (clipPlane) mat.clippingPlanes = [clipPlane];
   const mesh = new THREE.Mesh(blockGeo, mat);
   mesh.userData.type = type;
   return mesh;
@@ -60,13 +61,18 @@ export class WallView {
   private rails: THREE.Mesh[] = [];
   private railMat: THREE.MeshStandardMaterial;
 
-  constructor(columns: LayerType[][], private columnCount: number) {
+  constructor(
+    columns: LayerType[][],
+    private columnCount: number,
+    private clipPlane?: THREE.Plane
+  ) {
     this.railMat = new THREE.MeshStandardMaterial({ color: 0x8d93c8, roughness: 0.55 });
+    if (clipPlane) this.railMat.clippingPlanes = [clipPlane];
     const maxRows = Math.max(1, ...columns.map((c) => c.length));
     for (let c = 0; c < columns.length; c++) {
       const meshes: THREE.Mesh[] = [];
       for (let r = 0; r < columns[c].length; r++) {
-        const mesh = makeBlockMesh(columns[c][r]);
+        const mesh = makeBlockMesh(columns[c][r], clipPlane);
         mesh.position.set(colX(c, columnCount), rowY(r), 0);
         this.group.add(mesh);
         meshes.push(mesh);
