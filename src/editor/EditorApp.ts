@@ -54,6 +54,7 @@ export class EditorApp {
   private minGroup = 2;
   private maxGroup = 6;
   private visibleRows = 12;
+  private dynamicBalls = 0;
   private columns: LayerType[][] | null = null;
   private balls: LayerType[] | null = null;
   private wallSig = '';
@@ -119,6 +120,7 @@ export class EditorApp {
       this.minGroup = lv.minGroup ?? 2;
       this.maxGroup = lv.maxGroup ?? 6;
       this.visibleRows = lv.visibleRows ?? 12;
+      this.dynamicBalls = lv.dynamicBalls ?? 0;
       this.columns = lv.columns.map((c) => [...c]);
       this.balls = [...lv.balls];
       this.columnCount = lv.columns.length;
@@ -206,6 +208,8 @@ export class EditorApp {
           <input class="mini-num" data-f="deck" type="number" min="0" max="5" /></div>
         <div class="ed-row"><span class="ed-label">Balls</span>
           <input class="mini-num" data-f="balls" type="number" min="1" max="999" /></div>
+        <div class="ed-row"><span class="ed-label">Dynamic balls</span>
+          <input class="mini-num" data-f="dynballs" type="number" min="0" max="99" /></div>
         <div class="ed-row"><span class="ed-label">Min group</span>
           <input class="mini-num" data-f="mingroup" type="number" min="1" max="999" /></div>
         <div class="ed-row"><span class="ed-label">Max group</span>
@@ -230,6 +234,7 @@ export class EditorApp {
     f('mingroup').value = String(this.minGroup);
     f('maxgroup').value = String(this.maxGroup);
     f('visrows').value = String(this.visibleRows);
+    f('dynballs').value = String(this.dynamicBalls);
 
     const readBack = () => {
       this.name = f('name').value || 'My Level';
@@ -241,9 +246,11 @@ export class EditorApp {
       this.minGroup = clampInt(f('mingroup').value, 1, 999, 2);
       this.maxGroup = clampInt(f('maxgroup').value, 1, 999, 6);
       this.visibleRows = clampInt(f('visrows').value, 3, 30, 12);
+      this.dynamicBalls = clampInt(f('dynballs').value, 0, 99, 0);
       this.updateSetupSummary();
     };
-    for (const k of ['name', 'types', 'layers', 'columns', 'deck', 'balls', 'mingroup', 'maxgroup', 'visrows']) {
+    // prettier-ignore
+    for (const k of ['name', 'types', 'layers', 'columns', 'deck', 'balls', 'mingroup', 'maxgroup', 'visrows', 'dynballs']) {
       f(k).addEventListener('input', readBack);
     }
     this.updateSetupSummary();
@@ -273,7 +280,8 @@ export class EditorApp {
     const dots = Array.from({ length: this.typeCount }, (_, t) =>
       `<span style="color:${colorHexCss(t)}">●</span>`
     ).join('');
-    summary.innerHTML = `${dots} ${total} blocks · ~${rows} rows · ${this.ballCount} balls · ${this.deckSlots} deck slot(s)`;
+    const dyn = this.dynamicBalls > 0 ? ` +${this.dynamicBalls} dynamic` : '';
+    summary.innerHTML = `${dots} ${total} blocks · ~${rows} rows · ${this.ballCount} balls${dyn} · ${this.deckSlots} deck slot(s)`;
     const warns: string[] = [];
     if (this.ballCount < this.typeCount)
       warns.push('Fewer balls than colors — some colors can never be cleared.');
@@ -477,6 +485,14 @@ export class EditorApp {
       this.renderBallsBar();
     });
     chips.appendChild(plus);
+    if (this.dynamicBalls > 0) {
+      const dyn = document.createElement('span');
+      dyn.className = 'ed-label';
+      dyn.style.minWidth = '0';
+      dyn.textContent = `+${this.dynamicBalls} ?`;
+      dyn.title = 'dynamic balls — colored by wall need in play';
+      chips.appendChild(dyn);
+    }
 
     const add = this.ballsBarEl.querySelector('[data-el="add"]') as HTMLElement;
     for (let t = 0; t < this.typeCount; t++) {
@@ -745,6 +761,7 @@ export class EditorApp {
       minGroup: this.minGroup,
       maxGroup: this.maxGroup,
       visibleRows: this.visibleRows,
+      dynamicBalls: this.dynamicBalls,
       columns: (this.columns ?? []).map((c) => [...c]),
       balls: [...(this.balls ?? [])],
     };

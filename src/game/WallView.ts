@@ -24,9 +24,10 @@ export function makeBlockMesh(type: LayerType, clipPlane?: THREE.Plane): THREE.M
   return mesh;
 }
 
+/** type < 0 = dynamic (undecided) ball — rendered gray until it takes a color. */
 export function makeBallMesh(type: LayerType): THREE.Mesh {
   const mat = new THREE.MeshStandardMaterial({
-    color: PALETTE[type % PALETTE.length],
+    color: type < 0 ? 0x878da3 : PALETTE[type % PALETTE.length],
     roughness: 0.22,
     metalness: 0.15,
   });

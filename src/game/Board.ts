@@ -22,12 +22,19 @@ export class Board {
   readonly deck: (LayerType | null)[];
   active: ActiveBall | null;
 
+  /** Queue entries with this value are dynamic: their color is decided only
+   * when they scroll into view, picking whatever the wall needs most. */
+  static readonly DYNAMIC: LayerType = -1;
+
   constructor(level: LevelData) {
     this.columns = level.columns.map((c) => [...c]);
-    const balls = [...level.balls];
-    this.active = balls.length > 0 ? { type: balls.shift()!, source: { kind: 'queue' } } : null;
-    this.queue = balls;
+    this.queue = [
+      ...level.balls,
+      ...new Array<LayerType>(Math.max(0, level.dynamicBalls ?? 0)).fill(Board.DYNAMIC),
+    ];
     this.deck = new Array<LayerType | null>(level.deckSlots).fill(null);
+    this.active = null;
+    this.refill();
   }
 
   blockAt(cell: Cell): LayerType | undefined {
@@ -103,8 +110,70 @@ export class Board {
   /** True when the queue leader was loaded into the empty shooting point. */
   refill(): boolean {
     if (this.active || this.queue.length === 0) return false;
+    if (this.queue[0] === Board.DYNAMIC) this.queue[0] = this.neededType();
     this.active = { type: this.queue.shift()!, source: { kind: 'queue' } };
     return true;
+  }
+
+  /**
+   * Decide the color of any dynamic balls within the first `visible` queue
+   * slots. Returns what was decided so the view can recolor the meshes.
+   */
+  decideDynamic(visible: number): { index: number; type: LayerType }[] {
+    const out: { index: number; type: LayerType }[] = [];
+    const n = Math.min(visible, this.queue.length);
+    for (let i = 0; i < n; i++) {
+      if (this.queue[i] !== Board.DYNAMIC) continue;
+      const type = this.neededType();
+      this.queue[i] = type;
+      out.push({ index: i, type });
+    }
+    return out;
+  }
+
+  /**
+   * The color the player most needs: every same-color cluster costs one ball,
+   * so pick the color with the biggest cluster-count vs. supply deficit
+   * (block count breaks ties).
+   */
+  private neededType(): LayerType {
+    const blocks = new Map<LayerType, number>();
+    const regions = new Map<LayerType, number>();
+    const seen = new Set<string>();
+    for (let c = 0; c < this.columns.length; c++) {
+      for (let r = 0; r < this.columns[c].length; r++) {
+        const t = this.columns[c][r];
+        blocks.set(t, (blocks.get(t) ?? 0) + 1);
+        if (!seen.has(`${c},${r}`)) {
+          for (const cell of this.region({ col: c, row: r })) {
+            seen.add(`${cell.col},${cell.row}`);
+          }
+          regions.set(t, (regions.get(t) ?? 0) + 1);
+        }
+      }
+    }
+    if (blocks.size === 0) return 0;
+
+    const supply = new Map<LayerType, number>();
+    const addSupply = (t: LayerType | null) => {
+      if (t !== null && t !== Board.DYNAMIC) supply.set(t, (supply.get(t) ?? 0) + 1);
+    };
+    addSupply(this.active?.type ?? null);
+    for (const t of this.queue) addSupply(t);
+    for (const t of this.deck) addSupply(t);
+
+    let best: LayerType = 0;
+    let bestDeficit = -Infinity;
+    let bestBlocks = -1;
+    for (const [t, n] of blocks) {
+      const deficit = (regions.get(t) ?? 0) - (supply.get(t) ?? 0);
+      if (deficit > bestDeficit || (deficit === bestDeficit && n > bestBlocks)) {
+        best = t;
+        bestDeficit = deficit;
+        bestBlocks = n;
+      }
+    }
+    return best;
   }
 
   /** Move the active ball into an empty deck slot; the queue leader loads. */

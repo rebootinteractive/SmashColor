@@ -126,7 +126,9 @@ export class GameApp {
       this.deckBalls.push(null);
     }
 
-    // Hand meshes: active + queue.
+    // Hand meshes: active + queue. Dynamic balls inside the visible window
+    // take their color before their meshes are built.
+    this.board.decideDynamic(QUEUE_VISIBLE);
     if (this.board.active) {
       this.activeMesh = makeBallMesh(this.board.active.type);
       this.activeMesh.position.set(0, this.shootY, 0);
@@ -141,7 +143,7 @@ export class GameApp {
 
     this.hud = new Hud(parent, {
       levelName: opts.level.name,
-      totalBalls: opts.level.balls.length,
+      totalBalls: opts.level.balls.length + Math.max(0, opts.level.dynamicBalls ?? 0),
       totalBlocks: totalBlocks(opts.level),
       onMenu: opts.onMenu,
       onRestart: opts.onRestart,
@@ -195,7 +197,42 @@ export class GameApp {
       if (slot === undefined || slot < 0) return;
       if (this.board.deck[slot] !== null) this.recall(slot);
       else this.stash(slot);
+      return;
     }
+
+    // Taps on the hand itself (queue, active ball, ring) are misclicks;
+    // anything else is a deliberate shot into the void — the ball is wasted.
+    const handTargets = [...this.queueMeshes, this.ring];
+    if (this.activeMesh) handTargets.push(this.activeMesh);
+    if (ray.intersectObjects(handTargets, false).length > 0) return;
+    const dz = ray.ray.direction.z;
+    if (Math.abs(dz) < 1e-6) return;
+    const t = -ray.ray.origin.z / dz;
+    this.shootVoid(ray.ray.origin.clone().addScaledVector(ray.ray.direction, t));
+  }
+
+  private shootVoid(target: THREE.Vector3): void {
+    if (!this.board.active || !this.activeMesh) return;
+    this.shooting = true;
+    this.board.consumeActive();
+    const ball = this.activeMesh;
+    this.activeMesh = null;
+    this.tweens.add(0.12, () => {}, { delay: 0.1, done: () => this.refillVisual() });
+
+    const start = ball.position.clone();
+    const mat = ball.material as THREE.MeshStandardMaterial;
+    mat.transparent = true;
+    this.tweens.add(
+      0.55,
+      (k) => {
+        ball.position.lerpVectors(start, target, Math.min(1, k * 1.8));
+        ball.position.y -= 5.5 * Math.max(0, k - 0.5) * Math.max(0, k - 0.5);
+        ball.position.z += Math.sin(k * Math.PI) * 1.0;
+        mat.opacity = 1 - k * k;
+      },
+      { done: () => disposeMesh(ball) }
+    );
+    this.afterShot();
   }
 
   // ---- shooting ----------------------------------------------------------
@@ -348,6 +385,7 @@ export class GameApp {
         this.moveBall(prev, this.deckPos(res.returned.slot), 0.88);
       }
     }
+    this.syncDynamic();
   }
 
   private deckPos(slot: number): THREE.Vector3 {
@@ -377,8 +415,28 @@ export class GameApp {
     if (!mesh) return;
     this.activeMesh = mesh;
     mesh.visible = true;
+    // The board may have decided this ball's color at refill time.
+    if ((mesh.userData.type as number) < 0) {
+      (mesh.material as THREE.MeshStandardMaterial).color.setHex(
+        PALETTE[this.board.active.type % PALETTE.length]
+      );
+      mesh.userData.type = this.board.active.type;
+    }
     this.moveBall(mesh, new THREE.Vector3(0, this.shootY, 0), 1);
     this.layoutQueue(true);
+    this.syncDynamic();
+  }
+
+  /** Color any dynamic balls that just scrolled into the visible window. */
+  private syncDynamic(): void {
+    for (const d of this.board.decideDynamic(QUEUE_VISIBLE)) {
+      const mesh = this.queueMeshes[d.index];
+      if (!mesh) continue;
+      (mesh.material as THREE.MeshStandardMaterial).color.setHex(
+        PALETTE[d.type % PALETTE.length]
+      );
+      mesh.userData.type = d.type;
+    }
   }
 
   private queueSlot(i: number): { pos: THREE.Vector3; scale: number; visible: boolean } {

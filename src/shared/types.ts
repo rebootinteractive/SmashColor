@@ -10,6 +10,9 @@ export interface LevelData {
   columns: LayerType[][];
   /** The full ball supply in order — balls[0] starts at the shooting point. */
   balls: LayerType[];
+  /** Extra assist balls at the end of the queue; their color is decided from
+   * the wall's needs when they scroll into view. */
+  dynamicBalls?: number;
   /** Editor pool parameter (layers per type), persisted for re-editing. */
   layersPerType?: number;
   /** Editor distribution bounds (adjacency group size), persisted for re-editing. */
