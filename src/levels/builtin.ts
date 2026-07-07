@@ -10,12 +10,13 @@ const level1: LevelData = {
   id: 'l1-first-smash',
   name: 'First Smash',
   deckSlots: 2,
+  dynamicBalls: 5,
   columns: [
     [0, 0, 1],
     [0, 1, 1],
     [0, 0, 1],
   ],
-  balls: [0, 1, 0],
+  balls: [],
 };
 
 const level2: LevelData = {
@@ -28,7 +29,8 @@ const level2: LevelData = {
     [1, 0, 2, 2],
     [0, 0, 1, 2],
   ],
-  balls: [1, 0, 2, 1, 1],
+  dynamicBalls: 5,
+  balls: [],
 };
 
 const level3: LevelData = {
@@ -44,7 +46,8 @@ const level3: LevelData = {
     [1, 1, 1, 0, 0, 0, 2],
     [2, 0, 3, 3, 1, 1, 0, 0, 0],
   ],
-  balls: [2, 3, 2, 2, 0, 0, 2, 2, 1, 3, 1],
+  dynamicBalls: 5,
+  balls: [2, 3, 2, 2, 0, 0],
 };
 
 export const BUILTIN_LEVELS: LevelData[] = [level1, level2, level3];

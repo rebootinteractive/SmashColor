@@ -240,12 +240,8 @@
     0,
     2,
     3,
-    0,
-    2,
-    1,
-    4,
-    4,
-    2
+    0
   ],
-  "visibleRows": 30
+  "visibleRows": 30,
+  "dynamicBalls": 5
 }
