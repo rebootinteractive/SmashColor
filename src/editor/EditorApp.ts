@@ -53,6 +53,7 @@ export class EditorApp {
   private ballCount = 12;
   private minGroup = 2;
   private maxGroup = 6;
+  private visibleRows = 12;
   private columns: LayerType[][] | null = null;
   private balls: LayerType[] | null = null;
   private wallSig = '';
@@ -76,9 +77,23 @@ export class EditorApp {
   private drag: DragState | null = null;
   private brushing = false;
 
+  // vertical scroll (tall walls)
+  private scrollEl!: HTMLDivElement;
+  private scroll01 = 0;
+  private scrollDragging = false;
+  private camD = 8;
+  private viewWorldH = 10;
+  private contentTop = 0;
+  private contentBottom = -10;
+
   private onPointerDown = (e: PointerEvent) => this.pointerDown(e);
   private onPointerMove = (e: PointerEvent) => this.pointerMove(e);
   private onPointerUp = (e: PointerEvent) => this.pointerUp(e);
+  private onWheel = (e: WheelEvent) => {
+    if (this.scrollEl.style.display === 'none') return;
+    this.scroll01 = Math.max(0, Math.min(1, this.scroll01 + e.deltaY / 900));
+    this.applyScroll();
+  };
 
   constructor(private parent: HTMLElement, private opts: EditorAppOptions) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -103,6 +118,7 @@ export class EditorApp {
       this.deckSlots = lv.deckSlots;
       this.minGroup = lv.minGroup ?? 2;
       this.maxGroup = lv.maxGroup ?? 6;
+      this.visibleRows = lv.visibleRows ?? 12;
       this.columns = lv.columns.map((c) => [...c]);
       this.balls = [...lv.balls];
       this.columnCount = lv.columns.length;
@@ -133,6 +149,7 @@ export class EditorApp {
     this.renderer.domElement.addEventListener('pointermove', this.onPointerMove);
     this.renderer.domElement.addEventListener('pointerup', this.onPointerUp);
     this.renderer.domElement.addEventListener('pointercancel', this.onPointerUp);
+    this.renderer.domElement.addEventListener('wheel', this.onWheel, { passive: true });
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(parent);
@@ -193,6 +210,8 @@ export class EditorApp {
           <input class="mini-num" data-f="mingroup" type="number" min="1" max="999" /></div>
         <div class="ed-row"><span class="ed-label">Max group</span>
           <input class="mini-num" data-f="maxgroup" type="number" min="1" max="999" /></div>
+        <div class="ed-row"><span class="ed-label">Visible rows</span>
+          <input class="mini-num" data-f="visrows" type="number" min="3" max="30" /></div>
       </div>
       <div class="setup-summary" data-el="summary"></div>
       <div class="setup-warn" data-el="warn"></div>
@@ -210,6 +229,7 @@ export class EditorApp {
     f('balls').value = String(this.ballCount);
     f('mingroup').value = String(this.minGroup);
     f('maxgroup').value = String(this.maxGroup);
+    f('visrows').value = String(this.visibleRows);
 
     const readBack = () => {
       this.name = f('name').value || 'My Level';
@@ -220,9 +240,10 @@ export class EditorApp {
       this.ballCount = clampInt(f('balls').value, 1, 999, 12);
       this.minGroup = clampInt(f('mingroup').value, 1, 999, 2);
       this.maxGroup = clampInt(f('maxgroup').value, 1, 999, 6);
+      this.visibleRows = clampInt(f('visrows').value, 3, 30, 12);
       this.updateSetupSummary();
     };
-    for (const k of ['name', 'types', 'layers', 'columns', 'deck', 'balls', 'mingroup', 'maxgroup']) {
+    for (const k of ['name', 'types', 'layers', 'columns', 'deck', 'balls', 'mingroup', 'maxgroup', 'visrows']) {
       f(k).addEventListener('input', readBack);
     }
     this.updateSetupSummary();
@@ -272,6 +293,7 @@ export class EditorApp {
     this.statusEl.style.display = 'none';
     this.ballsBarEl.style.display = 'none';
     this.bottomEl.style.display = 'none';
+    this.scrollEl.style.display = 'none';
   }
 
   // ---- page 2: wall + balls ---------------------------------------------------
@@ -297,6 +319,35 @@ export class EditorApp {
     this.ballsBarEl.style.marginTop = 'auto';
     this.ballsBarEl.style.padding = '0 10px';
     this.root.appendChild(this.ballsBarEl);
+
+    this.scrollEl = document.createElement('div');
+    this.scrollEl.className = 'editor-scroll';
+    this.scrollEl.style.display = 'none';
+    this.scrollEl.appendChild(document.createElement('div'));
+    (this.scrollEl.firstElementChild as HTMLElement).className = 'thumb';
+    this.root.appendChild(this.scrollEl);
+    const scrollTo = (e: PointerEvent) => {
+      const rect = this.scrollEl.getBoundingClientRect();
+      const frac = Math.max(0.08, this.viewWorldH / (this.contentTop - this.contentBottom));
+      const usable = rect.height * (1 - frac);
+      if (usable <= 0) return;
+      this.scroll01 = Math.max(
+        0,
+        Math.min(1, (e.clientY - rect.top - (rect.height * frac) / 2) / usable)
+      );
+      this.applyScroll();
+    };
+    this.scrollEl.addEventListener('pointerdown', (e) => {
+      this.scrollDragging = true;
+      this.scrollEl.setPointerCapture(e.pointerId);
+      scrollTo(e);
+    });
+    this.scrollEl.addEventListener('pointermove', (e) => {
+      if (this.scrollDragging) scrollTo(e);
+    });
+    const endScroll = () => (this.scrollDragging = false);
+    this.scrollEl.addEventListener('pointerup', endScroll);
+    this.scrollEl.addEventListener('pointercancel', endScroll);
 
     this.bottomEl = document.createElement('div');
     this.bottomEl.className = 'editor-bottom';
@@ -371,6 +422,7 @@ export class EditorApp {
     this.renderPalette();
     this.renderBallsBar();
     this.rebuild();
+    this.applyScroll();
     this.updateStatus();
   }
 
@@ -688,6 +740,7 @@ export class EditorApp {
       layersPerType: this.layersPerType,
       minGroup: this.minGroup,
       maxGroup: this.maxGroup,
+      visibleRows: this.visibleRows,
       columns: (this.columns ?? []).map((c) => [...c]),
       balls: [...(this.balls ?? [])],
     };
@@ -767,17 +820,40 @@ export class EditorApp {
     this.camera.updateProjectionMatrix();
   }
 
+  /**
+   * Fit the camera to the wall WIDTH only, so blocks stay big enough to
+   * manipulate. Walls taller than the resulting view window scroll
+   * vertically (scrollbar + mouse wheel).
+   */
   private fitCamera(): void {
     const maxRows = Math.max(4, ...(this.columns ?? [[]]).map((c) => c.length));
     const width = this.columnCount * COL_PITCH + 1.2;
-    const top = WALL_TOP + BLOCK_H + 1.6; // headroom under the toolbar
-    const bottom = WALL_TOP - maxRows * BLOCK_H - 2.6; // room for the balls strip
-    const height = top - bottom;
-    const cy = (top + bottom) / 2;
+    this.contentTop = WALL_TOP + BLOCK_H + 1.6; // headroom under the toolbar
+    this.contentBottom = WALL_TOP - maxRows * BLOCK_H - 2.6; // room for the balls strip
     const fovV = THREE.MathUtils.degToRad(this.camera.fov);
     const fovH = 2 * Math.atan(Math.tan(fovV / 2) * this.camera.aspect);
-    const d = Math.max(height / (2 * Math.tan(fovV / 2)), width / (2 * Math.tan(fovH / 2)));
-    this.camera.position.set(0, cy, d + 1.6);
+    this.camD = width / (2 * Math.tan(fovH / 2)) + 1.6;
+    this.viewWorldH = 2 * this.camD * Math.tan(fovV / 2);
+    this.applyScroll();
+  }
+
+  private applyScroll(): void {
+    const contentH = this.contentTop - this.contentBottom;
+    const onWallPage = this.toolbarEl.style.display !== 'none';
+    let cy: number;
+    if (contentH <= this.viewWorldH || !onWallPage) {
+      cy = (this.contentTop + this.contentBottom) / 2;
+      this.scrollEl.style.display = 'none';
+    } else {
+      this.scroll01 = Math.max(0, Math.min(1, this.scroll01));
+      cy = this.contentTop - this.viewWorldH / 2 - this.scroll01 * (contentH - this.viewWorldH);
+      this.scrollEl.style.display = 'block';
+      const frac = Math.max(0.08, this.viewWorldH / contentH);
+      const thumb = this.scrollEl.firstElementChild as HTMLElement;
+      thumb.style.height = `${frac * 100}%`;
+      thumb.style.top = `${this.scroll01 * (1 - frac) * 100}%`;
+    }
+    this.camera.position.set(0, cy, this.camD);
     this.camera.lookAt(0, cy, 0);
   }
 
@@ -789,6 +865,7 @@ export class EditorApp {
     this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove);
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp);
     this.renderer.domElement.removeEventListener('pointercancel', this.onPointerUp);
+    this.renderer.domElement.removeEventListener('wheel', this.onWheel);
     this.resizeObserver.disconnect();
     this.wall?.dispose();
     this.wall = null;

@@ -71,7 +71,7 @@ export class GameApp {
     this.board = new Board(opts.level);
     this.columnCount = opts.level.columns.length;
     const maxRows = Math.max(1, ...opts.level.columns.map((c) => c.length));
-    this.visibleRows = Math.min(maxRows, VISIBLE_ROWS);
+    this.visibleRows = Math.min(maxRows, Math.max(1, opts.level.visibleRows ?? VISIBLE_ROWS));
     this.shootY = shootYFor(this.visibleRows);
     this.deckY = deckYFor(this.shootY);
     this.queueY = queueYFor(this.deckY);

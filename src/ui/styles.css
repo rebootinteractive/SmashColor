@@ -514,6 +514,28 @@ textarea.json {
   background: var(--danger);
 }
 
+/* Editor vertical wall scrollbar */
+.editor-scroll {
+  position: absolute;
+  right: 5px;
+  top: 128px;
+  bottom: 190px;
+  width: 18px;
+  background: rgba(20, 22, 35, 0.14);
+  border-radius: 9px;
+  z-index: 4;
+  touch-action: none;
+}
+.editor-scroll .thumb {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  background: rgba(70, 76, 140, 0.55);
+  border-radius: 7px;
+  min-height: 26px;
+  pointer-events: none;
+}
+
 /* Editor step panels */
 .setup-panel {
   position: absolute;

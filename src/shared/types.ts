@@ -15,6 +15,8 @@ export interface LevelData {
   /** Editor distribution bounds (adjacency group size), persisted for re-editing. */
   minGroup?: number;
   maxGroup?: number;
+  /** Rows in play above the floor (default 12); deeper rows rise into view. */
+  visibleRows?: number;
 }
 
 export function totalBlocks(level: LevelData): number {
