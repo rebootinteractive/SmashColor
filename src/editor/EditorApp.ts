@@ -328,7 +328,8 @@ export class EditorApp {
     this.root.appendChild(this.scrollEl);
     const scrollTo = (e: PointerEvent) => {
       const rect = this.scrollEl.getBoundingClientRect();
-      const frac = Math.max(0.08, this.viewWorldH / (this.contentTop - this.contentBottom));
+      const thumb = this.scrollEl.firstElementChild as HTMLElement;
+      const frac = Math.min(1, thumb.offsetHeight / Math.max(1, rect.height));
       const usable = rect.height * (1 - frac);
       if (usable <= 0) return;
       this.scroll01 = Math.max(
@@ -501,6 +502,9 @@ export class EditorApp {
       this.selectedBall = null;
       this.renderBallsBar();
     });
+
+    // The strip's height changes as the queue wraps — reframe the wall.
+    this.applyScroll();
   }
 
   private ballClicked(i: number): void {
@@ -840,19 +844,33 @@ export class EditorApp {
   private applyScroll(): void {
     const contentH = this.contentTop - this.contentBottom;
     const onWallPage = this.toolbarEl.style.display !== 'none';
-    let cy: number;
-    if (contentH <= this.viewWorldH || !onWallPage) {
-      cy = (this.contentTop + this.contentBottom) / 2;
+    // The wall must fit the INNER rect between the overlay panels — measure
+    // them live (the balls strip changes height as the queue wraps).
+    const screenH = Math.max(1, this.parent.clientHeight);
+    const topPx = onWallPage ? this.toolbarEl.offsetHeight + this.statusEl.offsetHeight + 6 : 0;
+    const botPx = onWallPage ? this.ballsBarEl.offsetHeight + this.bottomEl.offsetHeight + 6 : 0;
+    const worldPerPx = this.viewWorldH / screenH;
+    const usableWorldH = Math.max(worldPerPx * 40, this.viewWorldH - (topPx + botPx) * worldPerPx);
+    // The usable rect's center sits below the screen center by (topPx-botPx)/2.
+    const centerOffset = ((topPx - botPx) / 2) * worldPerPx;
+
+    let targetCenter: number;
+    if (contentH <= usableWorldH || !onWallPage) {
+      targetCenter = (this.contentTop + this.contentBottom) / 2;
       this.scrollEl.style.display = 'none';
     } else {
       this.scroll01 = Math.max(0, Math.min(1, this.scroll01));
-      cy = this.contentTop - this.viewWorldH / 2 - this.scroll01 * (contentH - this.viewWorldH);
+      targetCenter =
+        this.contentTop - usableWorldH / 2 - this.scroll01 * (contentH - usableWorldH);
       this.scrollEl.style.display = 'block';
-      const frac = Math.max(0.08, this.viewWorldH / contentH);
+      this.scrollEl.style.top = `${topPx + 8}px`;
+      this.scrollEl.style.bottom = `${botPx + 8}px`;
+      const frac = Math.max(0.08, usableWorldH / contentH);
       const thumb = this.scrollEl.firstElementChild as HTMLElement;
       thumb.style.height = `${frac * 100}%`;
       thumb.style.top = `${this.scroll01 * (1 - frac) * 100}%`;
     }
+    const cy = targetCenter + centerOffset;
     this.camera.position.set(0, cy, this.camD);
     this.camera.lookAt(0, cy, 0);
   }
