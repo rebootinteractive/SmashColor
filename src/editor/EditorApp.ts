@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { LevelData, LayerType } from '../shared/types';
 import type { Cell } from '../game/Board';
-import { MAX_TYPES, colorHexCss } from '../shared/colors';
+import { MAX_TYPES, PALETTE, colorHexCss } from '../shared/colors';
 import { generateBalls, generateWall, mulberry32 } from '../shared/generate';
 import { WallView, makeBlockMesh } from '../game/WallView';
 import { BLOCK_H, COL_PITCH, WALL_TOP, colX } from '../game/layout';
@@ -13,7 +13,9 @@ export interface EditorAppOptions {
   onTestPlay(level: LevelData): void;
 }
 
-type Mode = 'group' | 'layer';
+type Mode = 'group' | 'layer' | 'brush';
+
+const MODES: Mode[] = ['group', 'layer', 'brush'];
 
 interface PendingTap {
   cell: Cell;
@@ -70,6 +72,7 @@ export class EditorApp {
   // input
   private pending: PendingTap | null = null;
   private drag: DragState | null = null;
+  private brushing = false;
 
   private onPointerDown = (e: PointerEvent) => this.pointerDown(e);
   private onPointerMove = (e: PointerEvent) => this.pointerMove(e);
@@ -258,6 +261,7 @@ export class EditorApp {
       <button class="tool-btn" data-act="distribute">🎲 Wall</button>
       <button class="tool-btn" data-mode="group">Group</button>
       <button class="tool-btn" data-mode="layer">Layer</button>
+      <button class="tool-btn" data-mode="brush">🖌 Brush</button>
       <div class="color-row" data-el="palette"></div>
       <button class="tool-btn" data-act="exit">← Menu</button>`;
     this.root.appendChild(this.toolbarEl);
@@ -292,7 +296,7 @@ export class EditorApp {
       this.rebuild();
       this.updateStatus();
     });
-    for (const mode of ['group', 'layer'] as Mode[]) {
+    for (const mode of MODES) {
       this.toolbarEl.querySelector(`[data-mode="${mode}"]`)!.addEventListener('click', () => {
         this.mode = mode;
         this.syncModeButtons();
@@ -348,7 +352,7 @@ export class EditorApp {
   }
 
   private syncModeButtons(): void {
-    for (const mode of ['group', 'layer'] as Mode[]) {
+    for (const mode of MODES) {
       this.toolbarEl
         .querySelector(`[data-mode="${mode}"]`)!
         .classList.toggle('active', this.mode === mode);
@@ -499,11 +503,23 @@ export class EditorApp {
     if (this.toolbarEl.style.display === 'none') return; // setup panel is open
     const cell = this.cellAt(e);
     if (!cell) return;
+    if (this.mode === 'brush') {
+      // Brush disables moving: press paints, and dragging keeps painting.
+      this.brushing = true;
+      this.renderer.domElement.setPointerCapture(e.pointerId);
+      this.brushCell(cell);
+      return;
+    }
     this.pending = { cell, sx: e.clientX, sy: e.clientY };
     this.renderer.domElement.setPointerCapture(e.pointerId);
   }
 
   private pointerMove(e: PointerEvent): void {
+    if (this.brushing) {
+      const cell = this.cellAt(e);
+      if (cell) this.brushCell(cell);
+      return;
+    }
     if (this.drag) {
       this.updateDrag(e);
       return;
@@ -513,6 +529,21 @@ export class EditorApp {
     const dy = e.clientY - this.pending.sy;
     if (dx * dx + dy * dy < 120) return; // still a tap
     this.beginDrag(e);
+  }
+
+  /** Paint one block in place (no rebuild — structure is unchanged). */
+  private brushCell(cell: Cell): void {
+    if (!this.columns || !this.wall) return;
+    if (this.columns[cell.col][cell.row] === this.paint) return;
+    this.columns[cell.col][cell.row] = this.paint;
+    const mesh = this.wall.meshAt(cell);
+    if (mesh) {
+      (mesh.material as THREE.MeshStandardMaterial).color.setHex(
+        PALETTE[this.paint % PALETTE.length]
+      );
+      mesh.userData.type = this.paint;
+    }
+    this.updateStatus();
   }
 
   private beginDrag(e: PointerEvent): void {
@@ -567,6 +598,10 @@ export class EditorApp {
   }
 
   private pointerUp(e: PointerEvent): void {
+    if (this.brushing) {
+      this.brushing = false;
+      return;
+    }
     if (this.drag && this.columns) {
       const d = this.drag;
       this.drag = null;
@@ -604,8 +639,12 @@ export class EditorApp {
         `<span style="color:${colorHexCss(t)}">●</span>${n}${n !== this.layersPerType ? '⚠' : ''}`
     );
     const off = counts.some((n) => n !== this.layersPerType);
+    const hint =
+      this.mode === 'brush'
+        ? 'Brush · drag to paint (moving off)'
+        : `${this.mode === 'group' ? 'Group' : 'Layer'} · tap = paint, drag = move`;
     this.statusEl.innerHTML =
-      `${this.mode === 'group' ? 'Group' : 'Layer'} · tap = paint, drag = move &nbsp; ${parts.join(' ')}` +
+      `${hint} &nbsp; ${parts.join(' ')}` +
       (off ? ` &nbsp;(pool target ${this.layersPerType} each)` : ' &nbsp;✓ pool balanced');
     this.statusEl.className = 'editor-status' + (off ? '' : ' ok');
   }
