@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import type { LevelData, LayerType } from '../shared/types';
+import type { Cell } from '../game/Board';
 import { MAX_TYPES, colorHexCss } from '../shared/colors';
 import { generateBalls, generateWall, mulberry32 } from '../shared/generate';
-import { WallView } from '../game/WallView';
-import { BLOCK_H, COL_PITCH, WALL_TOP } from '../game/layout';
+import { WallView, makeBlockMesh } from '../game/WallView';
+import { BLOCK_H, COL_PITCH, WALL_TOP, colX } from '../game/layout';
 import { saveCustomLevel } from '../ui/storage';
 
 export interface EditorAppOptions {
@@ -14,6 +15,21 @@ export interface EditorAppOptions {
 
 type Mode = 'group' | 'layer';
 
+interface PendingTap {
+  cell: Cell;
+  sx: number;
+  sy: number;
+}
+
+interface DragState {
+  types: LayerType[];
+  fromCol: number;
+  fromIdx: number;
+  ghost: THREE.Group;
+  ghostMeshes: THREE.Mesh[];
+  target: { col: number; idx: number } | null;
+}
+
 export class EditorApp {
   // three
   private renderer: THREE.WebGLRenderer;
@@ -22,6 +38,8 @@ export class EditorApp {
   private rafId = 0;
   private resizeObserver: ResizeObserver;
   private wall: WallView | null = null;
+  private marker: THREE.Mesh;
+  private markerMat: THREE.MeshBasicMaterial;
 
   // level state
   private levelId: string;
@@ -43,13 +61,19 @@ export class EditorApp {
   // dom
   private root: HTMLDivElement;
   private setupPanel!: HTMLDivElement;
-  private ballsPanel!: HTMLDivElement;
   private statusEl!: HTMLDivElement;
   private toolbarEl!: HTMLDivElement;
+  private ballsBarEl!: HTMLDivElement;
   private bottomEl!: HTMLDivElement;
   private modalEl: HTMLDivElement | null = null;
 
+  // input
+  private pending: PendingTap | null = null;
+  private drag: DragState | null = null;
+
   private onPointerDown = (e: PointerEvent) => this.pointerDown(e);
+  private onPointerMove = (e: PointerEvent) => this.pointerMove(e);
+  private onPointerUp = (e: PointerEvent) => this.pointerUp(e);
 
   constructor(private parent: HTMLElement, private opts: EditorAppOptions) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -61,6 +85,11 @@ export class EditorApp {
     const dir = new THREE.DirectionalLight(0xffffff, 1.4);
     dir.position.set(2, 5, 7);
     this.scene.add(dir);
+
+    this.markerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    this.marker = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.06, 0.7), this.markerMat);
+    this.marker.visible = false;
+    this.scene.add(this.marker);
 
     if (opts.initial) {
       const lv = opts.initial;
@@ -90,11 +119,14 @@ export class EditorApp {
     parent.appendChild(this.root);
     this.buildChrome();
     this.buildSetupPanel();
-    this.buildBallsPanel();
     if (opts.initial) this.enterWall();
     else this.showSetup();
 
     this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown);
+    this.renderer.domElement.addEventListener('pointermove', this.onPointerMove);
+    this.renderer.domElement.addEventListener('pointerup', this.onPointerUp);
+    this.renderer.domElement.addEventListener('pointercancel', this.onPointerUp);
+
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(parent);
     this.handleResize();
@@ -210,133 +242,19 @@ export class EditorApp {
 
   private showSetup(): void {
     this.setupPanel.style.display = 'flex';
-    this.ballsPanel.style.display = 'none';
     this.toolbarEl.style.display = 'none';
     this.statusEl.style.display = 'none';
+    this.ballsBarEl.style.display = 'none';
     this.bottomEl.style.display = 'none';
   }
 
-  // ---- balls sub-panel ---------------------------------------------------------
-
-  private buildBallsPanel(): void {
-    this.ballsPanel = document.createElement('div');
-    this.ballsPanel.className = 'setup-panel';
-    this.root.appendChild(this.ballsPanel);
-    this.ballsPanel.style.display = 'none';
-  }
-
-  private enterBalls(): void {
-    if (!this.balls) this.balls = generateBalls(this.genParams(), this.nextRand());
-    this.selectedBall = null;
-    this.setupPanel.style.display = 'none';
-    this.ballsPanel.style.display = 'flex';
-    this.toolbarEl.style.display = 'none';
-    this.statusEl.style.display = 'none';
-    this.bottomEl.style.display = 'none';
-    this.renderBalls();
-  }
-
-  private renderBalls(): void {
-    const sel = this.selectedBall;
-    this.ballsPanel.innerHTML = `
-      <div class="menu-title">Ball Queue</div>
-      <div class="menu-sub">First ball (left) loads into the shooting point. Tap a ball,
-      then tap where it should go — or remove it. Tap a color below to append a new ball.</div>
-      <div class="ed-card"><div class="ed-row queue-chips" data-el="chips"></div></div>
-      <div class="ed-card">
-        <div class="ed-row"><span class="ed-label">Add</span>
-          <div class="color-row" data-el="add"></div>
-          ${sel !== null ? '<span class="ed-spacer"></span><button class="btn danger small" data-act="remove">🗑 Remove</button>' : ''}
-        </div>
-      </div>
-      <div class="setup-summary" data-el="hint">${
-        sel !== null
-          ? 'Now tap a destination ball (insert before it), ⊕ to append — or remove it.'
-          : 'Tap a ball to pick it up.'
-      }</div>
-      <div class="menu-footer" style="display:flex;gap:10px">
-        <button class="btn ghost" data-act="distribute">🎲 Distribute</button>
-        <button class="btn" style="flex:1" data-act="done">Done → Wall</button>
-      </div>`;
-
-    const chips = this.ballsPanel.querySelector('[data-el="chips"]') as HTMLElement;
-    this.balls!.forEach((t, i) => {
-      const dot = document.createElement('button');
-      dot.className = 'color-dot' + (sel === i ? ' active' : '');
-      dot.style.background = colorHexCss(t);
-      dot.title = i === 0 ? 'first shot' : `#${i + 1}`;
-      dot.addEventListener('click', () => this.ballClicked(i));
-      chips.appendChild(dot);
-    });
-    const plus = document.createElement('button');
-    plus.className = 'color-dot';
-    plus.style.background = 'transparent';
-    plus.style.border = '2px dashed #8b91a6';
-    plus.title = 'move to end';
-    plus.addEventListener('click', () => {
-      if (this.selectedBall === null) return;
-      const [b] = this.balls!.splice(this.selectedBall, 1);
-      this.balls!.push(b);
-      this.selectedBall = null;
-      this.renderBalls();
-    });
-    chips.appendChild(plus);
-
-    const add = this.ballsPanel.querySelector('[data-el="add"]') as HTMLElement;
-    for (let t = 0; t < this.typeCount; t++) {
-      const dot = document.createElement('button');
-      dot.className = 'color-dot';
-      dot.style.background = colorHexCss(t);
-      dot.addEventListener('click', () => {
-        this.balls!.push(t);
-        this.renderBalls();
-      });
-      add.appendChild(dot);
-    }
-
-    this.ballsPanel.querySelector('[data-act="remove"]')?.addEventListener('click', () => {
-      if (this.selectedBall === null) return;
-      this.balls!.splice(this.selectedBall, 1);
-      this.selectedBall = null;
-      this.renderBalls();
-    });
-    this.ballsPanel
-      .querySelector('[data-act="distribute"]')!
-      .addEventListener('click', () => {
-        this.ballCount = this.balls!.length || this.ballCount;
-        this.balls = generateBalls(this.genParams(), this.nextRand());
-        this.selectedBall = null;
-        this.renderBalls();
-      });
-    this.ballsPanel
-      .querySelector('[data-act="done"]')!
-      .addEventListener('click', () => this.enterWall());
-  }
-
-  private ballClicked(i: number): void {
-    const sel = this.selectedBall;
-    if (sel === null) {
-      this.selectedBall = i;
-    } else if (sel === i) {
-      this.selectedBall = null;
-    } else {
-      const [ball] = this.balls!.splice(sel, 1);
-      let target = i;
-      if (sel < i) target--; // removal shifted the target left
-      this.balls!.splice(target, 0, ball);
-      this.selectedBall = null;
-    }
-    this.renderBalls();
-  }
-
-  // ---- page 2: wall ---------------------------------------------------------
+  // ---- page 2: wall + balls ---------------------------------------------------
 
   private buildChrome(): void {
     this.toolbarEl = document.createElement('div');
     this.toolbarEl.className = 'editor-toolbar';
     this.toolbarEl.innerHTML = `
       <button class="tool-btn" data-act="setup">⚙ Setup</button>
-      <button class="tool-btn" data-act="balls">● Balls</button>
       <button class="tool-btn" data-act="distribute">🎲 Wall</button>
       <button class="tool-btn" data-mode="group">Group</button>
       <button class="tool-btn" data-mode="layer">Layer</button>
@@ -348,9 +266,13 @@ export class EditorApp {
     this.statusEl.className = 'editor-status';
     this.root.appendChild(this.statusEl);
 
+    this.ballsBarEl = document.createElement('div');
+    this.ballsBarEl.style.marginTop = 'auto';
+    this.ballsBarEl.style.padding = '0 10px';
+    this.root.appendChild(this.ballsBarEl);
+
     this.bottomEl = document.createElement('div');
     this.bottomEl.className = 'editor-bottom';
-    this.bottomEl.style.marginTop = 'auto';
     this.bottomEl.innerHTML = `
       <button class="btn small" data-act="test">▶ Test</button>
       <button class="btn ghost small" data-act="copy">Copy JSON</button>
@@ -362,9 +284,6 @@ export class EditorApp {
       this.renderSetup();
       this.showSetup();
     });
-    this.toolbarEl
-      .querySelector('[data-act="balls"]')!
-      .addEventListener('click', () => this.enterBalls());
     this.toolbarEl
       .querySelector('[data-act="exit"]')!
       .addEventListener('click', () => this.opts.onExit());
@@ -415,13 +334,15 @@ export class EditorApp {
   private enterWall(): void {
     if (!this.balls) this.balls = generateBalls(this.genParams(), this.nextRand());
     if (!this.columns) this.columns = generateWall(this.genParams(), this.nextRand());
+    this.selectedBall = null;
     this.setupPanel.style.display = 'none';
-    this.ballsPanel.style.display = 'none';
     this.toolbarEl.style.display = 'flex';
     this.statusEl.style.display = 'block';
+    this.ballsBarEl.style.display = 'block';
     this.bottomEl.style.display = 'flex';
     this.syncModeButtons();
     this.renderPalette();
+    this.renderBallsBar();
     this.rebuild();
     this.updateStatus();
   }
@@ -432,6 +353,91 @@ export class EditorApp {
         .querySelector(`[data-mode="${mode}"]`)!
         .classList.toggle('active', this.mode === mode);
     }
+  }
+
+  // ---- balls strip (same page as the wall) ------------------------------------
+
+  private renderBallsBar(): void {
+    if (!this.balls) return;
+    const sel = this.selectedBall;
+    this.ballsBarEl.innerHTML = `
+      <div class="ed-card" style="margin-bottom:6px">
+        <div class="ed-row" style="max-height:64px;overflow-y:auto">
+          <span class="ed-label">Queue ▸</span>
+          <div class="queue-chips" data-el="chips"></div>
+        </div>
+        <div class="ed-row">
+          <span class="ed-label">Add</span>
+          <div class="color-row" data-el="add"></div>
+          <span class="ed-spacer"></span>
+          ${sel !== null ? '<button class="btn danger small" data-act="remove">🗑</button>' : ''}
+          <button class="btn ghost small" data-act="rand-balls">🎲</button>
+        </div>
+      </div>`;
+
+    const chips = this.ballsBarEl.querySelector('[data-el="chips"]') as HTMLElement;
+    this.balls.forEach((t, i) => {
+      const dot = document.createElement('button');
+      dot.className = 'color-dot' + (sel === i ? ' active' : '');
+      dot.style.background = colorHexCss(t);
+      dot.title = i === 0 ? 'first shot' : `#${i + 1}`;
+      dot.addEventListener('click', () => this.ballClicked(i));
+      chips.appendChild(dot);
+    });
+    const plus = document.createElement('button');
+    plus.className = 'color-dot';
+    plus.style.background = 'transparent';
+    plus.style.border = '2px dashed #8b91a6';
+    plus.title = 'move to end';
+    plus.addEventListener('click', () => {
+      if (this.selectedBall === null) return;
+      const [b] = this.balls!.splice(this.selectedBall, 1);
+      this.balls!.push(b);
+      this.selectedBall = null;
+      this.renderBallsBar();
+    });
+    chips.appendChild(plus);
+
+    const add = this.ballsBarEl.querySelector('[data-el="add"]') as HTMLElement;
+    for (let t = 0; t < this.typeCount; t++) {
+      const dot = document.createElement('button');
+      dot.className = 'color-dot';
+      dot.style.background = colorHexCss(t);
+      dot.addEventListener('click', () => {
+        this.balls!.push(t);
+        this.renderBallsBar();
+      });
+      add.appendChild(dot);
+    }
+
+    this.ballsBarEl.querySelector('[data-act="remove"]')?.addEventListener('click', () => {
+      if (this.selectedBall === null) return;
+      this.balls!.splice(this.selectedBall, 1);
+      this.selectedBall = null;
+      this.renderBallsBar();
+    });
+    this.ballsBarEl.querySelector('[data-act="rand-balls"]')!.addEventListener('click', () => {
+      this.ballCount = this.balls!.length || this.ballCount;
+      this.balls = generateBalls(this.genParams(), this.nextRand());
+      this.selectedBall = null;
+      this.renderBallsBar();
+    });
+  }
+
+  private ballClicked(i: number): void {
+    const sel = this.selectedBall;
+    if (sel === null) {
+      this.selectedBall = i;
+    } else if (sel === i) {
+      this.selectedBall = null;
+    } else {
+      const [ball] = this.balls!.splice(sel, 1);
+      let target = i;
+      if (sel < i) target--; // removal shifted the target left
+      this.balls!.splice(target, 0, ball);
+      this.selectedBall = null;
+    }
+    this.renderBallsBar();
   }
 
   // ---- scene ---------------------------------------------------------------
@@ -445,11 +451,10 @@ export class EditorApp {
     this.fitCamera();
   }
 
-  // ---- painting ------------------------------------------------------------------
+  // ---- wall input: tap = paint, drag = move ----------------------------------
 
-  private pointerDown(e: PointerEvent): void {
-    if (!this.columns || !this.wall) return;
-    if (this.toolbarEl.style.display === 'none') return; // a panel is open
+  private cellAt(e: PointerEvent): Cell | null {
+    if (!this.wall) return null;
     const rect = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -458,24 +463,134 @@ export class EditorApp {
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
     const hits = ray.intersectObjects(this.wall.allMeshes(), false);
-    if (hits.length === 0) return;
-    const cell = this.wall.cellOf(hits[0].object);
-    if (!cell) return;
+    if (hits.length === 0) return null;
+    return this.wall.cellOf(hits[0].object);
+  }
 
-    const column = this.columns[cell.col];
-    if (this.mode === 'layer') {
-      column[cell.row] = this.paint;
-    } else {
-      // Repaint the contiguous same-color vertical run containing the tapped block.
-      const type = column[cell.row];
-      let start = cell.row;
-      while (start > 0 && column[start - 1] === type) start--;
-      let end = cell.row;
-      while (end < column.length - 1 && column[end + 1] === type) end++;
-      for (let r = start; r <= end; r++) column[r] = this.paint;
+  /** World point on the wall plane (z = 0) under the pointer. */
+  private pointerWorld(e: PointerEvent): THREE.Vector3 | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const dz = ray.ray.direction.z;
+    if (Math.abs(dz) < 1e-6) return null;
+    const t = -ray.ray.origin.z / dz;
+    return ray.ray.origin.clone().addScaledVector(ray.ray.direction, t);
+  }
+
+  /** The rows this edit affects: the single layer, or its vertical run. */
+  private runBounds(cell: Cell): { start: number; count: number } {
+    const column = this.columns![cell.col];
+    if (this.mode === 'layer') return { start: cell.row, count: 1 };
+    const type = column[cell.row];
+    let start = cell.row;
+    while (start > 0 && column[start - 1] === type) start--;
+    let end = cell.row;
+    while (end < column.length - 1 && column[end + 1] === type) end++;
+    return { start, count: end - start + 1 };
+  }
+
+  private pointerDown(e: PointerEvent): void {
+    if (!this.columns || this.drag) return;
+    if (this.toolbarEl.style.display === 'none') return; // setup panel is open
+    const cell = this.cellAt(e);
+    if (!cell) return;
+    this.pending = { cell, sx: e.clientX, sy: e.clientY };
+    this.renderer.domElement.setPointerCapture(e.pointerId);
+  }
+
+  private pointerMove(e: PointerEvent): void {
+    if (this.drag) {
+      this.updateDrag(e);
+      return;
     }
+    if (!this.pending || !this.columns) return;
+    const dx = e.clientX - this.pending.sx;
+    const dy = e.clientY - this.pending.sy;
+    if (dx * dx + dy * dy < 120) return; // still a tap
+    this.beginDrag(e);
+  }
+
+  private beginDrag(e: PointerEvent): void {
+    const cell = this.pending!.cell;
+    this.pending = null;
+    const { start, count } = this.runBounds(cell);
+    const types = this.columns![cell.col].splice(start, count);
     this.rebuild();
-    this.updateStatus();
+
+    const ghost = new THREE.Group();
+    const ghostMeshes: THREE.Mesh[] = [];
+    types.forEach((t, i) => {
+      const m = makeBlockMesh(t);
+      m.position.y = -i * BLOCK_H; // keep top-to-bottom visual order
+      m.scale.setScalar(0.92);
+      ghost.add(m);
+      ghostMeshes.push(m);
+    });
+    this.scene.add(ghost);
+    this.drag = { types, fromCol: cell.col, fromIdx: start, ghost, ghostMeshes, target: null };
+    this.updateDrag(e);
+    this.statusEl.textContent = 'Drop on a column to insert — release elsewhere to put it back.';
+    this.statusEl.className = 'editor-status';
+  }
+
+  private updateDrag(e: PointerEvent): void {
+    if (!this.drag || !this.columns) return;
+    const p = this.pointerWorld(e);
+    if (!p) return;
+    this.drag.ghost.position.set(p.x, p.y + 0.2, 0.5);
+
+    let target: { col: number; idx: number } | null = null;
+    for (let c = 0; c < this.columnCount; c++) {
+      if (Math.abs(p.x - colX(c, this.columnCount)) <= COL_PITCH / 2) {
+        const L = this.columns[c].length;
+        const idx = Math.max(0, Math.min(L, Math.round((WALL_TOP - p.y) / BLOCK_H)));
+        target = { col: c, idx };
+        break;
+      }
+    }
+    this.drag.target = target;
+    if (target) {
+      this.marker.visible = true;
+      this.marker.position.set(
+        colX(target.col, this.columnCount),
+        WALL_TOP - target.idx * BLOCK_H,
+        0.1
+      );
+    } else {
+      this.marker.visible = false;
+    }
+  }
+
+  private pointerUp(e: PointerEvent): void {
+    if (this.drag && this.columns) {
+      const d = this.drag;
+      this.drag = null;
+      this.marker.visible = false;
+      this.scene.remove(d.ghost);
+      for (const m of d.ghostMeshes) (m.material as THREE.Material).dispose();
+      if (d.target) {
+        this.columns[d.target.col].splice(d.target.idx, 0, ...d.types);
+      } else {
+        this.columns[d.fromCol].splice(d.fromIdx, 0, ...d.types);
+      }
+      this.rebuild();
+      this.updateStatus();
+    } else if (this.pending && this.columns) {
+      // A tap: paint the layer / group under the finger.
+      const cell = this.pending.cell;
+      this.pending = null;
+      const { start, count } = this.runBounds(cell);
+      const column = this.columns[cell.col];
+      for (let r = start; r < start + count; r++) column[r] = this.paint;
+      this.rebuild();
+      this.updateStatus();
+    }
+    this.pending = null;
   }
 
   // ---- status -------------------------------------------------------------------
@@ -490,7 +605,7 @@ export class EditorApp {
     );
     const off = counts.some((n) => n !== this.layersPerType);
     this.statusEl.innerHTML =
-      `${this.mode === 'group' ? 'Group' : 'Layer'} paint · tap the wall &nbsp; ${parts.join(' ')}` +
+      `${this.mode === 'group' ? 'Group' : 'Layer'} · tap = paint, drag = move &nbsp; ${parts.join(' ')}` +
       (off ? ` &nbsp;(pool target ${this.layersPerType} each)` : ' &nbsp;✓ pool balanced');
     this.statusEl.className = 'editor-status' + (off ? '' : ' ok');
   }
@@ -592,7 +707,7 @@ export class EditorApp {
     const maxRows = Math.max(4, ...(this.columns ?? [[]]).map((c) => c.length));
     const width = this.columnCount * COL_PITCH + 1.2;
     const top = WALL_TOP + BLOCK_H + 1.6; // headroom under the toolbar
-    const bottom = WALL_TOP - maxRows * BLOCK_H - 1.4;
+    const bottom = WALL_TOP - maxRows * BLOCK_H - 2.6; // room for the balls strip
     const height = top - bottom;
     const cy = (top + bottom) / 2;
     const fovV = THREE.MathUtils.degToRad(this.camera.fov);
@@ -607,9 +722,19 @@ export class EditorApp {
   dispose(): void {
     cancelAnimationFrame(this.rafId);
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
+    this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove);
+    this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp);
+    this.renderer.domElement.removeEventListener('pointercancel', this.onPointerUp);
     this.resizeObserver.disconnect();
     this.wall?.dispose();
     this.wall = null;
+    if (this.drag) {
+      this.scene.remove(this.drag.ghost);
+      for (const m of this.drag.ghostMeshes) (m.material as THREE.Material).dispose();
+      this.drag = null;
+    }
+    (this.marker.geometry as THREE.BufferGeometry).dispose();
+    this.markerMat.dispose();
     this.modalEl?.remove();
     this.modalEl = null;
     this.root.remove();
