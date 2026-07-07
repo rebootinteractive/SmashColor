@@ -12,6 +12,9 @@ export interface LevelData {
   balls: LayerType[];
   /** Editor pool parameter (layers per type), persisted for re-editing. */
   layersPerType?: number;
+  /** Editor distribution bounds (adjacency group size), persisted for re-editing. */
+  minGroup?: number;
+  maxGroup?: number;
 }
 
 export function totalBlocks(level: LevelData): number {

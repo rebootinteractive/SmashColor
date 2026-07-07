@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { LevelData, LayerType } from '../shared/types';
 import type { Cell } from '../game/Board';
 import { MAX_TYPES, PALETTE, colorHexCss } from '../shared/colors';
-import { generateBalls, generateWall, mulberry32 } from '../shared/generate';
+import { generateBalls, generateWall, groupsFeasible, mulberry32 } from '../shared/generate';
 import { WallView, makeBlockMesh } from '../game/WallView';
 import { BLOCK_H, COL_PITCH, WALL_TOP, colX } from '../game/layout';
 import { saveCustomLevel } from '../ui/storage';
@@ -51,6 +51,8 @@ export class EditorApp {
   private columnCount = 6;
   private deckSlots = 3;
   private ballCount = 12;
+  private minGroup = 2;
+  private maxGroup = 6;
   private columns: LayerType[][] | null = null;
   private balls: LayerType[] | null = null;
   private wallSig = '';
@@ -99,6 +101,8 @@ export class EditorApp {
       this.levelId = lv.id;
       this.name = lv.name;
       this.deckSlots = lv.deckSlots;
+      this.minGroup = lv.minGroup ?? 2;
+      this.maxGroup = lv.maxGroup ?? 6;
       this.columns = lv.columns.map((c) => [...c]);
       this.balls = [...lv.balls];
       this.columnCount = lv.columns.length;
@@ -137,7 +141,7 @@ export class EditorApp {
   }
 
   private sigWall(): string {
-    return `${this.typeCount}|${this.layersPerType}|${this.columnCount}`;
+    return `${this.typeCount}|${this.layersPerType}|${this.columnCount}|${this.minGroup}|${this.maxGroup}`;
   }
   private sigBalls(): string {
     return `${this.typeCount}|${this.ballCount}`;
@@ -149,6 +153,8 @@ export class EditorApp {
       columnCount: this.columnCount,
       deckSlots: this.deckSlots,
       ballCount: this.ballCount,
+      minGroup: this.minGroup,
+      maxGroup: this.maxGroup,
     };
   }
   private nextRand(): () => number {
@@ -183,6 +189,10 @@ export class EditorApp {
           <input class="mini-num" data-f="deck" type="number" min="0" max="5" /></div>
         <div class="ed-row"><span class="ed-label">Balls</span>
           <input class="mini-num" data-f="balls" type="number" min="1" max="60" /></div>
+        <div class="ed-row"><span class="ed-label">Min group</span>
+          <input class="mini-num" data-f="mingroup" type="number" min="1" max="40" /></div>
+        <div class="ed-row"><span class="ed-label">Max group</span>
+          <input class="mini-num" data-f="maxgroup" type="number" min="1" max="40" /></div>
       </div>
       <div class="setup-summary" data-el="summary"></div>
       <div class="setup-warn" data-el="warn"></div>
@@ -198,6 +208,8 @@ export class EditorApp {
     f('columns').value = String(this.columnCount);
     f('deck').value = String(this.deckSlots);
     f('balls').value = String(this.ballCount);
+    f('mingroup').value = String(this.minGroup);
+    f('maxgroup').value = String(this.maxGroup);
 
     const readBack = () => {
       this.name = f('name').value || 'My Level';
@@ -206,9 +218,11 @@ export class EditorApp {
       this.columnCount = clampInt(f('columns').value, 2, 9, 6);
       this.deckSlots = clampInt(f('deck').value, 0, 5, 3);
       this.ballCount = clampInt(f('balls').value, 1, 60, 12);
+      this.minGroup = clampInt(f('mingroup').value, 1, 40, 2);
+      this.maxGroup = clampInt(f('maxgroup').value, 1, 40, 6);
       this.updateSetupSummary();
     };
-    for (const k of ['name', 'types', 'layers', 'columns', 'deck', 'balls']) {
+    for (const k of ['name', 'types', 'layers', 'columns', 'deck', 'balls', 'mingroup', 'maxgroup']) {
       f(k).addEventListener('input', readBack);
     }
     this.updateSetupSummary();
@@ -240,6 +254,12 @@ export class EditorApp {
     if (this.ballCount < this.typeCount)
       warns.push('Fewer balls than colors — some colors can never be cleared.');
     if (this.deckSlots === 0) warns.push('No deck slots — pure queue order, very strict.');
+    if (this.minGroup > this.maxGroup)
+      warns.push('Min group is larger than max group — they will be swapped.');
+    else if (!groupsFeasible(this.layersPerType, this.minGroup, this.maxGroup))
+      warns.push(
+        `${this.layersPerType} layers per color can't split into groups of ${this.minGroup}–${this.maxGroup} — min will relax to 1.`
+      );
     warn.textContent = warns.join(' ');
   }
 
@@ -663,6 +683,8 @@ export class EditorApp {
       name: this.name,
       deckSlots: this.deckSlots,
       layersPerType: this.layersPerType,
+      minGroup: this.minGroup,
+      maxGroup: this.maxGroup,
       columns: (this.columns ?? []).map((c) => [...c]),
       balls: [...(this.balls ?? [])],
     };
